@@ -119,8 +119,8 @@ def searchData(csvFile):
 
 
 if __name__ == '__main__':
-    parser = readConfig('init.conf')
     logger = configureLogging('logging_config.ini')
+    parser = readConfig('init.conf')
     app.secret_key = os.urandom(16)
     # app.run(debug=True, port=5555, host='0.0.0.0')
     # app.debug = True
