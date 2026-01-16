@@ -9,6 +9,7 @@ import csv
 from flask_compress import Compress
 from waitress import serve
 import re
+import yaml
 from pprint import pprint
 
 
@@ -28,10 +29,47 @@ def readConfig(configFile):
         logger.error('Error occurred while trying to read the config file.'.format(str(e)))
 
 
-def configureLogging(configFile):
+def read_config(config_path, config_file):
     try:
-        if os.path.exists(os.path.join('./', configFile)):
-            fileConfig(os.path.join('./', configFile), disable_existing_loggers=True)
+        if os.path.exists(os.path.join(config_path, config_file)):
+            parserData = yaml.safe_load(open(os.path.join(config_path, config_file)))
+            return parserData
+        else:
+            logger.error('Config file {} not found. Ensure that it exists in the same directory'.format(config_file))
+            exit(1)
+    except:
+        logger.error('Config file {} could not be loaded. Ensure that it exists in the same directory'.format(config_file))
+        exit(1)
+
+def set_in_dict(d, keys, value):
+    for k in keys[:-1]:
+        if k not in d or not isinstance(d[k], dict):
+            d[k] = {}
+        d = d[k]
+    d[keys[-1]] = value
+
+def merge_env_variables(config, prefix='APP__'):
+    for name,val in os.environ.items():
+        if name.startswith(prefix):
+            key_path = name[len(prefix):].lower().split('__')
+            if val.lower() in ("true", "false", "null"):
+                parsed = {"true": True, "false": False, "null": None}[val.lower()]
+            else:
+                try:
+                    parsed = int(val)
+                except:
+                    try:
+                        parsed = float(val)
+                    except:
+                        parsed = val
+            set_in_dict(config, key_path, parsed)
+    return config
+
+
+def configureLogging(logging_path, configFile):
+    try:
+        if os.path.exists(os.path.join(logging_path, configFile)):
+            fileConfig(os.path.join(logging_path, configFile), disable_existing_loggers=True)
             loggerObj = logging.getLogger()
             return loggerObj
         else:
@@ -44,23 +82,23 @@ def configureLogging(configFile):
 
 @app.route('/<csvFile>')
 def getData(csvFile):
-    if parser.has_section(csvFile):
+    if csvFile in config.keys():
         section = csvFile
         logger.debug('Explicit config section found for {}'.format(csvFile))
     else:
-        section = 'Global'
+        section = 'global'
         logger.debug('No section found for {}. Using Global config'.format(csvFile))
-    if os.path.exists(os.path.join(parser.get(section, 'csv_path'), csvFile + '.csv')):
+    if os.path.exists(os.path.join(config[section].get('csv_path'), csvFile + '.csv')):
         logger.debug('CSV file found in the path.')
         headers = []
         jsonData = []
-        with open(os.path.join(parser.get(section, 'csv_path'), csvFile + '.csv'), 'r') as infile:
+        with open(os.path.join(config[section].get('csv_path'), csvFile + '.csv'), 'r') as infile:
             csvData = csv.reader(infile)
             for index, line in enumerate(csvData):
                 if index == 0:
-                    if parser.has_option(section, 'headers'):
+                    if 'headers' in config[section].keys():
                         logger.debug('Headers found in configuration to be used as JSON keys. Ignoring the first line and using this instead.')
-                        headers = parser.get(section, 'headers').split(',')
+                        headers = config[section].get('headers').split(',')
                     else:
                         logger.debug('Using the first line as headers')
                         headers = line
@@ -80,23 +118,23 @@ def searchData(csvFile):
         for params in request.args.keys():
             paramName.append(params.lower())
             paramValue.append(request.args.get(params).lower())
-        if parser.has_section(csvFile):
+        if csvFile in config.keys():
             section = csvFile
             logger.debug('Explicit config section found for {}'.format(csvFile))
         else:
             section = 'Global'
             logger.debug('No section found for {}. Using Global config'.format(csvFile))
-        if os.path.exists(os.path.join(parser.get(section, 'csv_path'), csvFile + '.csv')):
+        if os.path.exists(os.path.join(config[section].get('csv_path'), csvFile + '.csv')):
             logger.debug('CSV file found in the path.')
             headers = []
             jsonData = defaultdict(list)
-            with open(os.path.join(parser.get(section, 'csv_path'), csvFile + '.csv'), 'r') as infile:
+            with open(os.path.join(config[section].get('csv_path'), csvFile + '.csv'), 'r') as infile:
                 csvData = csv.reader(infile)
                 for index, line in enumerate(csvData):
                     if index == 0:
-                        if parser.has_option(section, 'headers'):
+                        if 'headers' in config[section].keys():
                             logger.debug('Headers found in configuration to be used as JSON keys. Ignoring the first line and using this instead.')
-                            headers = parser.get(section, 'headers').split(',')
+                            headers = config[section]['headers'].split(',')
                         else:
                             logger.debug('Using the first line as headers')
                             headers = line
@@ -119,10 +157,22 @@ def searchData(csvFile):
 
 
 if __name__ == '__main__':
-    logger = configureLogging('logging_config.ini')
-    parser = readConfig('init.conf')
+    if 'APP_LOGGING_PATH' in os.environ.keys():
+        logging_path = os.environ['APP_LOGGING_PATH']
+    else:
+        logging_path = './'
+
+    logger = configureLogging(logging_path,'logging_config.ini')
+    #parser = readConfig('init.conf')
+    if 'APP_CONFIG_PATH' in os.environ.keys():
+        config_path = os.environ['APP_CONFIG_PATH']
+    else:
+        config_path = './'
+    config = read_config(config_path,'init.yml')
+    config = merge_env_variables(config)
+    pprint(config)
     app.secret_key = os.urandom(16)
     # app.run(debug=True, port=5555, host='0.0.0.0')
     # app.debug = True
     # app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
-    serve(app, port=parser.get('Global', 'Port'), host='0.0.0.0', url_scheme='https')
+    serve(app, port=int(config.get('global').get('port')), host='0.0.0.0', url_scheme='https')
